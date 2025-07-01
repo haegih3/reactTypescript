@@ -1,0 +1,76 @@
+image: node:20
+
+definitions:
+  caches:
+    node: ~/.npm
+
+  steps:
+    - step: &open-pr
+        name: Open PR
+        oidc: true
+        caches:
+          - node
+        script:
+          - echo "Installing dependencies..."
+          - npm install
+          - echo "Building the project..."
+          - npm run build
+          - echo "Deploying to S3..."
+          - pipe: atlassian/aws-s3-deploy:1.6.1
+            variables:
+              AWS_DEFAULT_REGION: ap-northeast-2
+              AWS_OIDC_ROLE_ARN: arn:aws:iam::484907483548:role/aws_bitbucket_pipeline_oidc_role
+              S3_BUCKET: halo-dt-an2-s3-halosync
+              LOCAL_PATH: out/
+              ACL: private
+
+    - step: &deploy-main
+        name: Deploy to S3
+        oidc: true
+        caches:
+          - node
+        script:
+          - echo "Installing dependencies..."
+          - npm install
+          - echo "Deploying to S3..."
+          - |
+            echo "Checking branch information..."
+            if [ -z "$BITBUCKET_BRANCH" ]; then
+              export CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            else
+              export CURRENT_BRANCH="$BITBUCKET_BRANCH"
+            fi
+            echo "Branch detected: $CURRENT_BRANCH"
+            echo "Deploying to S3 based on branch..."
+            if [ "$CURRENT_BRANCH" = "develop" ]; then
+              export S3_BUCKET="halo-ds-an2-s3-halosync"
+              export AWS_OIDC_ROLE_ARN="arn:aws:iam::484907483548:role/halo-dc-role-bitbucketpipelineoidc"
+              npm run build
+            elif [ "$CURRENT_BRANCH" = "main" ]; then
+              export S3_BUCKET="halo-p-an2-s3-halosync"
+              export AWS_OIDC_ROLE_ARN="arn:aws:iam::390402540209:role/halo-p-role-bitbucketpipelineoidc"
+              npm run build
+            else
+              echo "Unsupported branch: $CURRENT_BRANCH"
+              exit 1
+            fi
+            echo "S3_BUCKET is set to: $S3_BUCKET"
+            echo "AWS_OIDC_ROLE_ARN is set to: $AWS_OIDC_ROLE_ARN"
+          - pipe: atlassian/aws-s3-deploy:1.6.1
+            variables:
+              AWS_DEFAULT_REGION: ap-northeast-2
+              AWS_OIDC_ROLE_ARN: $AWS_OIDC_ROLE_ARN
+              S3_BUCKET: $S3_BUCKET
+              LOCAL_PATH: out/
+              ACL: private
+
+pipelines:
+  pull-requests:
+    '**':
+      - step: *open-pr
+
+  branches:
+    main:
+      - step: *deploy-main
+    develop:
+      - step: *deploy-main
